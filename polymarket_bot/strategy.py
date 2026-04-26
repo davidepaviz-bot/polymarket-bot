@@ -5,6 +5,8 @@ Implements two strategies:
   A) Mean Reversion: buy YES when cheap, buy NO when expensive.
   B) Probabilistic Edge: compare market price against an estimated
      probability and trade when the edge exceeds a threshold.
+
+Includes volatility filter to focus on markets with real opportunity.
 """
 
 from dataclasses import dataclass
@@ -28,19 +30,37 @@ class Signal:
     confidence: float  # 0-1
 
 
+def filter_volatile_markets(
+    markets: list[dict],
+    min_price: float = 0.15,
+    max_price: float = 0.85,
+    min_volume: float = 10_000,
+) -> list[dict]:
+    """
+    Filter markets to those with real trading opportunity:
+      - YES price in [min_price, max_price] (not near 0 or 1)
+      - Minimum volume threshold for liquidity
+    """
+    return [
+        m for m in markets
+        if min_price <= m["yes_price"] <= max_price
+        and m["volume"] >= min_volume
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Strategy A – Mean Reversion
 # ---------------------------------------------------------------------------
 
 class MeanReversionStrategy:
     """
-    Simple mean-reversion logic:
+    Mean-reversion logic with volatility awareness:
       • If YES price < low_threshold  → BUY YES  (market undervalues outcome)
       • If YES price > high_threshold → BUY NO   (market overvalues outcome)
       • Otherwise                     → HOLD
     """
 
-    def __init__(self, low_threshold: float = 0.45, high_threshold: float = 0.55):
+    def __init__(self, low_threshold: float = 0.40, high_threshold: float = 0.60):
         self.low = low_threshold
         self.high = high_threshold
 
@@ -54,7 +74,7 @@ class MeanReversionStrategy:
                 question=market["question"],
                 yes_price=yes_price,
                 no_price=market["no_price"],
-                reason=f"Mean-reversion: YES price {yes_price:.2f} < {self.low}",
+                reason=f"Mean-reversion: YES {yes_price:.2f} < {self.low}",
                 confidence=min(confidence, 1.0),
             )
         if yes_price > self.high:
@@ -65,7 +85,7 @@ class MeanReversionStrategy:
                 question=market["question"],
                 yes_price=yes_price,
                 no_price=market["no_price"],
-                reason=f"Mean-reversion: YES price {yes_price:.2f} > {self.high}",
+                reason=f"Mean-reversion: YES {yes_price:.2f} > {self.high}",
                 confidence=min(confidence, 1.0),
             )
         return Signal(
@@ -74,7 +94,7 @@ class MeanReversionStrategy:
             question=market["question"],
             yes_price=yes_price,
             no_price=market["no_price"],
-            reason=f"Mean-reversion: YES price {yes_price:.2f} within [{self.low}, {self.high}]",
+            reason=f"Mean-reversion: YES {yes_price:.2f} within [{self.low}, {self.high}]",
             confidence=0.0,
         )
 
@@ -113,7 +133,7 @@ class ProbabilisticEdgeStrategy:
                 reason="Prob-edge: no estimate available",
                 confidence=0.0,
             )
-        edge = est - yes_price  # positive → YES is undervalued
+        edge = est - yes_price
         if edge > self.min_edge:
             return Signal(
                 side=Side.BUY_YES,
@@ -121,7 +141,7 @@ class ProbabilisticEdgeStrategy:
                 question=market["question"],
                 yes_price=yes_price,
                 no_price=market["no_price"],
-                reason=f"Prob-edge: est={est:.2f}, market={yes_price:.2f}, edge={edge:+.2f}",
+                reason=f"Prob-edge: est={est:.2f}, mkt={yes_price:.2f}, edge={edge:+.2f}",
                 confidence=min(abs(edge), 1.0),
             )
         if edge < -self.min_edge:
@@ -131,7 +151,7 @@ class ProbabilisticEdgeStrategy:
                 question=market["question"],
                 yes_price=yes_price,
                 no_price=market["no_price"],
-                reason=f"Prob-edge: est={est:.2f}, market={yes_price:.2f}, edge={edge:+.2f}",
+                reason=f"Prob-edge: est={est:.2f}, mkt={yes_price:.2f}, edge={edge:+.2f}",
                 confidence=min(abs(edge), 1.0),
             )
         return Signal(
