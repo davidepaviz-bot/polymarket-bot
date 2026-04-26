@@ -228,8 +228,10 @@ def llm_estimate_probability(
         match = re.search(r"(\d+\.?\d*)", text)
         if match:
             val = float(match.group(1))
-            if val > 1.0:
-                val /= 100.0  # handle "35" → 0.35
+            if 1.0 < val <= 1.5:
+                val = 1.0  # LLM slightly exceeded 1.0, treat as max probability
+            elif val > 1.5:
+                val /= 100.0  # handle percentage format like "35" → 0.35
             return max(0.01, min(0.99, val))
     except (requests.RequestException, KeyError, ValueError, IndexError):
         pass
