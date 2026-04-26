@@ -32,9 +32,9 @@ class Signal:
 
 def filter_volatile_markets(
     markets: list[dict],
-    min_price: float = 0.15,
-    max_price: float = 0.85,
-    min_volume: float = 10_000,
+    min_price: float = 0.10,
+    max_price: float = 0.90,
+    min_volume: float = 1_000,
 ) -> list[dict]:
     """
     Filter markets to those with real trading opportunity:

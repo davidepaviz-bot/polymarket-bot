@@ -33,8 +33,8 @@ I dati vengono salvati in **CSV** e **JSON-lines** nella cartella `data/` per an
 Implementa due strategie pluggabili + filtro volatilità:
 
 #### Filtro Volatilità
-- Scarta mercati con prezzo YES < 0.15 o > 0.85 (risultato troppo certo)
-- Scarta mercati con volume < 10,000 (poca liquidità)
+- Scarta mercati con prezzo YES < 0.10 o > 0.90 (risultato troppo certo)
+- Scarta mercati con volume < 1,000 (poca liquidità)
 
 #### A) Mean Reversion
 | Condizione | Azione |
@@ -108,7 +108,7 @@ python -m polymarket_bot --strategy prob --cycles 30
 | `--interval` | 30 | Secondi tra un ciclo e l'altro |
 | `--strategy` | `mean_reversion` | Strategia: `mean_reversion` o `prob` |
 | `--capital` | 200.0 | Capitale iniziale in € |
-| `--markets` | 50 | Numero mercati da fetchare per ciclo |
+| `--markets` | 200 | Numero mercati da fetchare per ciclo (paginazione automatica) |
 
 ### Consigli per Short-Term Trading
 
@@ -147,6 +147,7 @@ logs/
 | v1.0 | Bot base con mean reversion e prob edge |
 | v2.0 | Filtro volatilità, diversificazione, risoluzione simulata |
 | **v3.0** | **Short-term** — solo movimenti di prezzo reali, take-profit/stop-loss, max hold |
+| **v3.1** | **Pool ampliato** — paginazione API (fino a 500+ mercati), filtri rilassati (0.10-0.90, vol>=1K) |
 
 ---
 

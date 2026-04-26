@@ -22,12 +22,36 @@ def _ensure_data_dir():
 
 
 def fetch_markets(limit: int = 20, active: bool = True) -> list[dict]:
-    """Return a list of parsed market dicts from the Gamma API."""
-    params = {"limit": limit, "active": str(active).lower(), "closed": "false"}
-    resp = requests.get(f"{GAMMA_API}/markets", params=params, timeout=15)
-    resp.raise_for_status()
-    raw_markets = resp.json()
-    return [_parse_market(m) for m in raw_markets if _is_valid(m)]
+    """Return a list of parsed market dicts from the Gamma API.
+
+    Supports pagination: if *limit* exceeds the API page size (100),
+    multiple requests are made transparently.
+    """
+    page_size = min(limit, 100)
+    collected: list[dict] = []
+    offset = 0
+
+    while len(collected) < limit:
+        params = {
+            "limit": page_size,
+            "active": str(active).lower(),
+            "closed": "false",
+            "offset": offset,
+        }
+        resp = requests.get(f"{GAMMA_API}/markets", params=params, timeout=15)
+        resp.raise_for_status()
+        raw_markets = resp.json()
+
+        if not raw_markets:
+            break
+
+        collected.extend(_parse_market(m) for m in raw_markets if _is_valid(m))
+        offset += len(raw_markets)
+
+        if len(raw_markets) < page_size:
+            break
+
+    return collected[:limit]
 
 
 def fetch_market_by_id(market_id: str) -> dict | None:

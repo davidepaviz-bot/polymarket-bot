@@ -135,7 +135,7 @@ def run_bot(
     interval: int = 30,
     strategy_name: str = "mean_reversion",
     capital: float = 200.0,
-    market_limit: int = 50,
+    market_limit: int = 200,
 ):
     """Main trading loop — short-term, price-movement based."""
     print("=" * 60)
@@ -181,8 +181,8 @@ def run_bot(
             continue
 
         # 2. Filter for tradeable markets
-        markets = filter_volatile_markets(all_markets, min_price=0.15, max_price=0.85)
-        print(f"  Fetched {len(all_markets)} markets, {len(markets)} tradeable (price 0.15-0.85)")
+        markets = filter_volatile_markets(all_markets, min_price=0.10, max_price=0.90, min_volume=1_000)
+        print(f"  Fetched {len(all_markets)} markets, {len(markets)} tradeable (price 0.10-0.90)")
         save_snapshot_csv(all_markets)
 
         if not markets:
@@ -343,7 +343,7 @@ def main():
     parser.add_argument("--strategy", choices=["mean_reversion", "prob"], default="mean_reversion",
                         help="Strategy: mean_reversion or prob")
     parser.add_argument("--capital", type=float, default=200.0, help="Initial capital in \u20ac (default: 200)")
-    parser.add_argument("--markets", type=int, default=50, help="Markets to fetch per cycle (default: 50)")
+    parser.add_argument("--markets", type=int, default=200, help="Markets to fetch per cycle (default: 200)")
     args = parser.parse_args()
 
     run_bot(
