@@ -13,7 +13,7 @@ polymarket_bot/
 ├── market_reader.py   # Data ingestion da API pubblica Polymarket
 ├── strategy.py        # Motore segnali: Mean Reversion + Probabilistic Edge
 ├── paper_trader.py    # Paper trading engine + risk management
-├── main.py            # Entry point — orchestra l'intero loop
+├── main.py            # Entry point — orchestra l'intero loop (short-term v3.0)
 └── __main__.py        # Permette `python -m polymarket_bot`
 ```
 
@@ -30,19 +30,23 @@ I dati vengono salvati in **CSV** e **JSON-lines** nella cartella `data/` per an
 
 ### 2. Strategy Engine (`strategy.py`)
 
-Implementa due strategie pluggabili:
+Implementa due strategie pluggabili + filtro volatilità:
+
+#### Filtro Volatilità
+- Scarta mercati con prezzo YES < 0.15 o > 0.85 (risultato troppo certo)
+- Scarta mercati con volume < 10,000 (poca liquidità)
 
 #### A) Mean Reversion
 | Condizione | Azione |
 |---|---|
-| YES price < 0.45 | **BUY YES** — il mercato sottovaluta l'outcome |
-| YES price > 0.55 | **BUY NO** — il mercato sopravvaluta l'outcome |
+| YES price < 0.40 | **BUY YES** — il mercato sottovaluta l'outcome |
+| YES price > 0.60 | **BUY NO** — il mercato sopravvaluta l'outcome |
 | Altrimenti | HOLD |
 
 #### B) Probabilistic Edge
 Confronta la probabilità di mercato con una stima esterna:
-- Se `stima - prezzo > +0.10` → **BUY YES**
-- Se `stima - prezzo < -0.10` → **BUY NO**
+- Se `stima - prezzo > +0.08` → **BUY YES**
+- Se `stima - prezzo < -0.08` → **BUY NO**
 - Altrimenti → HOLD
 
 ### 3. Paper Trading System (`paper_trader.py`)
@@ -50,19 +54,29 @@ Confronta la probabilità di mercato con una stima esterna:
 - Capitale iniziale: **€200**
 - Max **1 posizione** aperta alla volta
 - Position sizing: **10% del capitale** per trade
-- **Stop-loss** automatico al 30%
+- **Stop-loss** automatico al 5% (short-term)
 - Tracking completo: entry/exit price, PnL, equity curve
 
-### 4. Execution Engine (Simulata)
+### 4. Short-Term Trading Engine (`main.py` v3.0)
 
-L'engine simula l'esecuzione di ordini BUY/SELL su eventi binari YES/NO.
-Nessun wallet crypto, nessuna API di exchange, nessun soldo reale.
+Il cuore del bot — orientato al **breve termine**:
+
+| Meccanismo | Descrizione |
+|---|---|
+| **Take Profit** | Chiude se il prezzo si muove ≥3% a nostro favore |
+| **Stop Loss** | Chiude se il prezzo si muove ≥5% contro di noi |
+| **Max Hold** | Forza la chiusura dopo 10 cicli per liberare capitale |
+| **Diversificazione** | Non trada lo stesso mercato due volte di fila (ultimi 5) |
+| **Preferenza volatilità** | Preferisce mercati che stanno già mostrando movimento |
+| **Chiusura fine sessione** | Chiude ogni posizione aperta alla fine della run |
+
+**Nessuna simulazione di risoluzione** — il profitto/perdita deriva interamente dal movimento reale dei prezzi su Polymarket.
 
 ### 5. Logging System
 
 - Trade log salvato in `logs/trade_log.csv`
 - Equity curve salvata in `logs/equity_curve.json`
-- Output in console con balance, numero trade, profit cumulativo
+- Output in console con balance, PnL realizzato e unrealized
 
 ---
 
@@ -70,28 +84,37 @@ Nessun wallet crypto, nessuna API di exchange, nessun soldo reale.
 
 ```bash
 # 1. Clona il repository
-git clone <repo-url>
+git clone https://github.com/davidepaviz-bot/polymarket-bot.git
 cd polymarket-bot
 
 # 2. Installa dipendenze
 pip install -r requirements.txt
 
-# 3. Avvia il bot (5 cicli di default)
+# 3. Avvia il bot (20 cicli, 30s di default)
 python -m polymarket_bot
 
-# 4. Oppure con opzioni personalizzate
-python -m polymarket_bot --cycles 20 --interval 15 --strategy prob --capital 500
+# 4. Run più lungo per catturare più movimenti di prezzo
+python -m polymarket_bot --cycles 50 --interval 60
+
+# 5. Usa la strategia probabilistic edge
+python -m polymarket_bot --strategy prob --cycles 30
 ```
 
 ### Opzioni CLI
 
 | Flag | Default | Descrizione |
 |---|---|---|
-| `--cycles` | 5 | Numero di cicli di trading |
+| `--cycles` | 20 | Numero di cicli di trading |
 | `--interval` | 30 | Secondi tra un ciclo e l'altro |
 | `--strategy` | `mean_reversion` | Strategia: `mean_reversion` o `prob` |
 | `--capital` | 200.0 | Capitale iniziale in € |
-| `--markets` | 20 | Numero mercati da fetchare per ciclo |
+| `--markets` | 50 | Numero mercati da fetchare per ciclo |
+
+### Consigli per Short-Term Trading
+
+- **Intervallo 30-60s**: permette di catturare micro-movimenti di prezzo reali
+- **Cicli 30-50**: sessioni più lunghe = più opportunità di trading
+- **Mercati volatili**: il bot preferisce automaticamente mercati con prezzi che si stanno muovendo
 
 ---
 
@@ -114,6 +137,16 @@ logs/
 ├── trade_log.csv           # Registro completo dei trade
 └── equity_curve.json       # Evoluzione del capitale
 ```
+
+---
+
+## Versioni
+
+| Versione | Descrizione |
+|---|---|
+| v1.0 | Bot base con mean reversion e prob edge |
+| v2.0 | Filtro volatilità, diversificazione, risoluzione simulata |
+| **v3.0** | **Short-term** — solo movimenti di prezzo reali, take-profit/stop-loss, max hold |
 
 ---
 
