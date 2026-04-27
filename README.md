@@ -155,6 +155,9 @@ pip install -r requirements.txt
 # 3. Avvia il bot (20 cicli, 30s di default)
 python -m polymarket_bot
 
+# Oppure da IDLE: apri run.py e premi F5
+# Modifica i parametri direttamente nel file run.py
+
 # 4. Run più lungo per catturare più movimenti di prezzo
 python -m polymarket_bot --cycles 50 --interval 60
 
