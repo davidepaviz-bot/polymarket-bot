@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-Polymarket Paper Trading Bot – main entry point (v5.0 Adaptive).
+Polymarket Paper Trading Bot – main entry point (v6.0 Multi-Timeframe).
 
-Short-term trading: profit from price movements between cycles.
-Uses real Polymarket API prices + realistic market microstructure
-(bid-ask spread, slippage, micro-fluctuations).
+Supports three timeframes:
+  - short  : 30s cycles, tight exits, micro-movements
+  - mid    : 5min cycles, variable TP, trailing stop
+  - long   : 30min cycles, wide exits, trend-following
 
-v5.0: persistent trade history, adaptive training, Kelly sizing.
+v6.0: timeframe modes, variable take-profit, trailing stop-loss.
 
 Usage:
-    python -m polymarket_bot.main                          # default: 20 cycles, 30s
-    python -m polymarket_bot.main --cycles 50 --interval 60
-    python -m polymarket_bot.main --strategy sentiment --adaptive
+    python -m polymarket_bot.main --timeframe short         # default
+    python -m polymarket_bot.main --timeframe mid --adaptive
+    python -m polymarket_bot.main --timeframe long --strategy sentiment
 """
 
 import argparse
@@ -79,25 +80,107 @@ def _execution_price(mid_yes: float, side: str, volume: float) -> float:
 _momentum: dict[str, float] = {}
 
 
-def _micro_price(mid: float, volume: float, market_id: str = "") -> float:
+def _micro_price(
+    mid: float, volume: float, market_id: str = "",
+    time_scale: float = 1.0,
+) -> float:
     """Simulate micro-fluctuation with momentum.
     Models real order-book dynamics: order flow creates short-term trends,
     then prices mean-revert.  Higher volume = smaller moves.
+
+    time_scale controls amplitude: longer intervals → bigger moves.
+      short=1.0, mid=3.0, long=8.0
     """
     half_spread = _spread_for(volume, mid)
     prev_mom = _momentum.get(market_id, 0.0)
-    # Order-flow shock scaled by spread
-    shock_scale = half_spread * 2.5
+    # Order-flow shock scaled by spread and time horizon
+    shock_scale = half_spread * 2.5 * math.sqrt(time_scale)
     new_noise = random.gauss(0, shock_scale)
-    # Strong momentum: 60% carry — trends persist across multiple ticks
-    mom = prev_mom * 0.60 + new_noise * 0.40
-    # Occasional large order block (8% chance — whale trade / news catalyst)
-    if random.random() < 0.08:
-        mom += random.choice([-1, 1]) * abs(random.gauss(0, half_spread * 4))
+    # Momentum carry: longer timeframes have stronger trends
+    carry = min(0.75, 0.50 + time_scale * 0.03)
+    mom = prev_mom * carry + new_noise * (1.0 - carry)
+    # Occasional large order block (probability scales with time)
+    whale_prob = min(0.20, 0.08 * math.sqrt(time_scale))
+    if random.random() < whale_prob:
+        mom += random.choice([-1, 1]) * abs(random.gauss(0, half_spread * 4 * math.sqrt(time_scale)))
     # Light mean-reversion toward mid to prevent runaway drift
     mom *= 0.97
     _momentum[market_id] = mom
     return max(0.001, min(0.999, mid + mom))
+
+
+# ── Timeframe Presets ─────────────────────────────────────────────────
+
+_TIMEFRAME_PRESETS = {
+    "short": {
+        "interval": 30,
+        "cycles": 20,
+        "take_profit_base": 0.03,   # 3% base TP
+        "take_profit_max": 0.05,    # 5% max TP (with high edge)
+        "stop_loss": 0.05,          # 5% SL
+        "max_hold": 8,
+        "trailing_stop": False,
+        "trailing_activation": 0.0,
+        "trailing_distance": 0.0,
+        "time_scale": 1.0,          # micro-price amplitude
+        "label": "Short-term (30s)",
+    },
+    "mid": {
+        "interval": 300,            # 5 min
+        "cycles": 30,
+        "take_profit_base": 0.05,   # 5% base TP
+        "take_profit_max": 0.12,    # 12% max TP
+        "stop_loss": 0.08,          # 8% SL (wider)
+        "max_hold": 20,             # hold up to 20 cycles (~100 min)
+        "trailing_stop": True,
+        "trailing_activation": 0.03, # activate after +3%
+        "trailing_distance": 0.02,   # trail 2% below peak
+        "time_scale": 3.0,
+        "label": "Mid-term (5min)",
+    },
+    "long": {
+        "interval": 1800,           # 30 min
+        "cycles": 30,
+        "take_profit_base": 0.08,   # 8% base TP
+        "take_profit_max": 0.20,    # 20% max TP
+        "stop_loss": 0.12,          # 12% SL (very wide)
+        "max_hold": 30,             # hold up to 30 cycles (~15 hours)
+        "trailing_stop": True,
+        "trailing_activation": 0.05, # activate after +5%
+        "trailing_distance": 0.03,   # trail 3% below peak
+        "time_scale": 8.0,
+        "label": "Long-term (30min)",
+    },
+}
+
+
+def _variable_take_profit(
+    base_tp: float,
+    max_tp: float,
+    edge: float,
+    hold_cycles: int,
+    max_hold: int,
+) -> float:
+    """Calculate variable take-profit threshold.
+
+    Scales TP based on:
+      1. Edge strength: higher edge → higher TP (let winners run)
+      2. Hold time: TP decreases as we approach max_hold (take what you can)
+
+    Returns the current TP threshold.
+    """
+    # Edge component: scale from base to max based on edge (0.08 → 0.30+)
+    edge_factor = min(1.0, edge / 0.25)  # normalize edge to 0-1
+    edge_tp = base_tp + (max_tp - base_tp) * edge_factor
+
+    # Time decay: as hold time increases, lower TP to take profits sooner
+    # After 75% of max_hold, start reducing TP back toward base
+    hold_ratio = hold_cycles / max_hold if max_hold > 0 else 0.0
+    if hold_ratio > 0.75:
+        decay = (hold_ratio - 0.75) / 0.25  # 0 → 1 in last quarter
+        edge_tp = edge_tp - (edge_tp - base_tp) * decay * 0.5
+
+    return max(base_tp, edge_tp)
 
 
 class PriceTracker:
@@ -140,23 +223,33 @@ MAX_RECENT = 5
 
 
 def run_bot(
-    cycles: int = 20,
-    interval: int = 30,
+    cycles: int | None = None,
+    interval: int | None = None,
     strategy_name: str = "mean_reversion",
     capital: float = 200.0,
     market_limit: int = 200,
     llm_provider: str | None = None,
     adaptive: bool = False,
+    timeframe: str = "short",
 ):
-    """Main trading loop — short-term, price-movement based."""
+    """Main trading loop — multi-timeframe, price-movement based."""
+    # Apply timeframe preset, then override with explicit args
+    preset = _TIMEFRAME_PRESETS[timeframe]
+    cycles = cycles if cycles is not None else preset["cycles"]
+    interval = interval if interval is not None else preset["interval"]
+
     print("=" * 60)
-    print("  POLYMARKET PAPER TRADING BOT  v5.0 (Adaptive + Sentiment)")
+    print("  POLYMARKET PAPER TRADING BOT  v6.0 (Multi-Timeframe)")
     print(f"  Strategy   : {strategy_name}")
     print(f"  Capital    : \u20ac{capital:.2f}")
+    print(f"  Timeframe  : {preset['label']}")
     print(f"  Cycles     : {cycles}")
     print(f"  Interval   : {interval}s")
-    print(f"  Mode       : Short-term (spread + micro-price simulation)")
     print(f"  Sizing     : {'Kelly (adaptive)' if adaptive else 'Fixed 10%'}")
+    print(f"  Take Profit: {preset['take_profit_base']:.0%}-{preset['take_profit_max']:.0%} (variable)")
+    print(f"  Stop Loss  : {preset['stop_loss']:.0%}")
+    if preset['trailing_stop']:
+        print(f"  Trailing   : ON (activate +{preset['trailing_activation']:.0%}, trail {preset['trailing_distance']:.0%})")
     print("=" * 60)
 
     # ── History & Adaptive Engine ──
@@ -201,11 +294,18 @@ def run_bot(
         if stats.avoid_categories:
             print(f"  Avoiding   : {', '.join(stats.avoid_categories)}")
 
-    # Exit thresholds
-    take_profit_pct = 0.03   # close if >=3% in our favor
-    stop_loss_pct = 0.05     # close if >=5% against us
-    max_hold_cycles = 8      # force close after 8 cycles
+    # Exit thresholds from timeframe preset
+    tp_base = preset["take_profit_base"]
+    tp_max = preset["take_profit_max"]
+    stop_loss_pct = preset["stop_loss"]
+    max_hold_cycles = preset["max_hold"]
+    use_trailing = preset["trailing_stop"]
+    trailing_activation = preset["trailing_activation"]
+    trailing_distance = preset["trailing_distance"]
+    time_scale = preset["time_scale"]
     hold_counter = 0
+    peak_pnl = 0.0  # track best unrealized PnL for trailing stop
+    trade_edge = 0.0  # edge of current trade for variable TP
 
     # Track volumes and trade metadata for history
     _volumes: dict[str, float] = {}
@@ -266,7 +366,7 @@ def run_bot(
                 vol = current_market["volume"]
 
                 # Simulate realistic current price (micro-fluctuation around API mid)
-                sim_price = _micro_price(api_mid, vol, pos.market_id)
+                sim_price = _micro_price(api_mid, vol, pos.market_id, time_scale=time_scale)
                 tracker.record(pos.market_id, sim_price)
 
                 # Calculate unrealized P&L against simulated price
@@ -280,36 +380,58 @@ def run_bot(
                 print(f"  Position: {pos.side} {pos.question[:50]}...")
                 print(f"    entry={pos.entry_price:.4f}  mid={api_mid:.4f}  sim={sim_price:.4f}  unrealized={change_pct:+.1%}  (hold {hold_counter})")
 
-                # A) Take profit
-                if change_pct >= take_profit_pct:
-                    exit_p = sim_price if pos.side == "YES" else (1.0 - sim_price)
-                    print(f"  \u2191 Take profit! {change_pct:+.1%}")
+                # Update peak PnL for trailing stop
+                if change_pct > peak_pnl:
+                    peak_pnl = change_pct
+
+                # Variable take-profit based on edge + hold time
+                current_tp = _variable_take_profit(
+                    tp_base, tp_max, trade_edge, hold_counter, max_hold_cycles,
+                )
+
+                # A) Take profit (variable)
+                if change_pct >= current_tp:
+                    print(f"  \u2191 Take profit! {change_pct:+.1%} (target was {current_tp:.1%})")
                     trader.close_position_at(sim_price, reason=f"take-profit {change_pct:+.1%}")
                     _save_trade_to_history(
                         trader, history_db, run_id, strategy_name,
-                        _trade_metadata, f"take-profit", hold_counter,
+                        _trade_metadata, "take-profit", hold_counter,
                     )
                     hold_counter = 0
+                    peak_pnl = 0.0
 
-                # B) Stop loss
+                # B) Trailing stop: if we were up enough and now dropping back
+                elif use_trailing and peak_pnl >= trailing_activation and change_pct <= peak_pnl - trailing_distance:
+                    print(f"  \u21a9 Trailing stop! peak={peak_pnl:+.1%} \u2192 now={change_pct:+.1%} (trail={trailing_distance:.0%})")
+                    trader.close_position_at(sim_price, reason=f"trailing-stop {change_pct:+.1%}")
+                    _save_trade_to_history(
+                        trader, history_db, run_id, strategy_name,
+                        _trade_metadata, "trailing-stop", hold_counter,
+                    )
+                    hold_counter = 0
+                    peak_pnl = 0.0
+
+                # C) Stop loss
                 elif change_pct <= -stop_loss_pct:
                     print(f"  \u2193 Stop loss! {change_pct:+.1%}")
                     trader.close_position_at(sim_price, reason=f"stop-loss {change_pct:+.1%}")
                     _save_trade_to_history(
                         trader, history_db, run_id, strategy_name,
-                        _trade_metadata, f"stop-loss", hold_counter,
+                        _trade_metadata, "stop-loss", hold_counter,
                     )
                     hold_counter = 0
+                    peak_pnl = 0.0
 
-                # C) Max hold
+                # D) Max hold
                 elif hold_counter >= max_hold_cycles:
                     print(f"  \u23f0 Max hold ({max_hold_cycles}) \u2014 closing at market ({change_pct:+.1%})")
                     trader.close_position_at(sim_price, reason=f"max-hold {change_pct:+.1%}")
                     _save_trade_to_history(
                         trader, history_db, run_id, strategy_name,
-                        _trade_metadata, f"max-hold", hold_counter,
+                        _trade_metadata, "max-hold", hold_counter,
                     )
                     hold_counter = 0
+                    peak_pnl = 0.0
 
         # 4. Look for new trades
         if not trader.has_open_position:
@@ -386,6 +508,8 @@ def run_bot(
                 # Adjust entry to the realistic fill price
                 if trader.has_open_position:
                     trader.position.entry_price = fill_price
+                    trade_edge = best_sig.confidence
+                    peak_pnl = 0.0
                     # Store metadata for history
                     _trade_metadata = {
                         "edge": best_sig.confidence,
@@ -505,9 +629,13 @@ def _save_trade_to_history(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Polymarket Paper Trading Bot (Adaptive)")
-    parser.add_argument("--cycles", type=int, default=20, help="Trading cycles (default: 20)")
-    parser.add_argument("--interval", type=int, default=30, help="Seconds between cycles (default: 30)")
+    parser = argparse.ArgumentParser(description="Polymarket Paper Trading Bot (Multi-Timeframe)")
+    parser.add_argument("--timeframe", choices=["short", "mid", "long"], default="short",
+                        help="Timeframe: short (30s), mid (5min), long (30min)")
+    parser.add_argument("--cycles", type=int, default=None,
+                        help="Trading cycles (default: from timeframe preset)")
+    parser.add_argument("--interval", type=int, default=None,
+                        help="Seconds between cycles (default: from timeframe preset)")
     parser.add_argument("--strategy", choices=["mean_reversion", "prob", "sentiment"], default="mean_reversion",
                         help="Strategy: mean_reversion, prob, or sentiment")
     parser.add_argument("--llm", choices=["openai", "groq"], default=None,
@@ -526,6 +654,7 @@ def main():
         market_limit=args.markets,
         llm_provider=args.llm,
         adaptive=args.adaptive,
+        timeframe=args.timeframe,
     )
 
 
