@@ -160,7 +160,7 @@ def _sentiment_band(score: float) -> str:
 
 _CATEGORY_KEYWORDS = {
     "nba": ["nba", "celtics", "lakers", "pistons", "knicks", "basketball", "finals"],
-    "nfl": ["nfl", "super bowl", "chiefs", "eagles", "football"],
+    "nfl": ["nfl", "super bowl", "chiefs", "eagles"],
     "nhl": ["nhl", "stanley cup", "hurricanes", "avalanche", "hockey"],
     "soccer": ["fifa", "world cup", "premier league", "champions league",
                "soccer", "football", "goal scorer", "greenwood"],
