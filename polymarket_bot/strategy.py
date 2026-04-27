@@ -1,12 +1,13 @@
 """
 Strategy Engine – signal generation for Polymarket paper trading.
 
-Implements three strategies:
+Implements four strategies:
   A) Mean Reversion: buy YES when cheap, buy NO when expensive.
   B) Probabilistic Edge: compare market price against an estimated
      probability and trade when the edge exceeds a threshold.
   C) Sentiment Edge: use news sentiment to estimate true probability
      and trade when the edge exceeds a threshold.
+  D) Ensemble: combines all three — trades only when 2/3 agree.
 
 Includes volatility filter to focus on markets with real opportunity.
 """
@@ -260,4 +261,98 @@ class SentimentEdgeStrategy:
                 f"sent={result.avg_sentiment:+.2f}, news={result.articles_found}"
             ),
             confidence=0.0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Strategy D – Ensemble (combines all three)
+# ---------------------------------------------------------------------------
+
+class EnsembleStrategy:
+    """Combine mean-reversion, prob-edge, and sentiment into one signal.
+
+    Trades only when at least ``min_agree`` strategies agree on the same
+    side (BUY_YES or BUY_NO).  Confidence is the average of the agreeing
+    strategies.  The reason string lists each strategy's vote.
+
+    Parameters
+    ----------
+    mean_rev : MeanReversionStrategy
+    prob_edge : ProbabilisticEdgeStrategy
+    sentiment : SentimentEdgeStrategy
+    min_agree : int
+        Minimum number of strategies that must agree (default 2 out of 3).
+    """
+
+    def __init__(
+        self,
+        mean_rev: MeanReversionStrategy,
+        prob_edge: ProbabilisticEdgeStrategy,
+        sentiment: SentimentEdgeStrategy,
+        min_agree: int = 2,
+    ):
+        self.strategies = [
+            ("MeanRev", mean_rev),
+            ("ProbEdge", prob_edge),
+            ("Sentiment", sentiment),
+        ]
+        self.min_agree = min_agree
+
+    @property
+    def prob_edge(self) -> ProbabilisticEdgeStrategy:
+        return self.strategies[1][1]
+
+    @property
+    def sentiment_engine(self) -> "SentimentEngine":
+        return self.strategies[2][1].engine
+
+    def evaluate(self, market: dict) -> Signal:
+        market_id = market["id"]
+        yes_price = market["yes_price"]
+
+        votes: dict[Side, list[tuple[str, float]]] = {
+            Side.BUY_YES: [],
+            Side.BUY_NO: [],
+        }
+        vote_reasons: list[str] = []
+
+        for name, strat in self.strategies:
+            sig = strat.evaluate(market)
+            short = sig.side.value if sig.side != Side.HOLD else "HOLD"
+            vote_reasons.append(f"{name}={short}")
+            if sig.side in votes:
+                votes[sig.side].append((name, sig.confidence))
+
+        # Find the side with most agreement
+        best_side = Side.HOLD
+        best_voters: list[tuple[str, float]] = []
+        for side, voters in votes.items():
+            if len(voters) >= self.min_agree and len(voters) > len(best_voters):
+                best_side = side
+                best_voters = voters
+
+        votes_str = ", ".join(vote_reasons)
+
+        if best_side == Side.HOLD:
+            return Signal(
+                side=Side.HOLD,
+                market_id=market_id,
+                question=market["question"],
+                yes_price=yes_price,
+                no_price=market["no_price"],
+                reason=f"Ensemble: no consensus ({votes_str})",
+                confidence=0.0,
+            )
+
+        avg_conf = sum(c for _, c in best_voters) / len(best_voters)
+        agree_names = "+".join(n for n, _ in best_voters)
+
+        return Signal(
+            side=best_side,
+            market_id=market_id,
+            question=market["question"],
+            yes_price=yes_price,
+            no_price=market["no_price"],
+            reason=f"Ensemble({agree_names}): {len(best_voters)}/3 agree | {votes_str}",
+            confidence=min(avg_conf, 1.0),
         )

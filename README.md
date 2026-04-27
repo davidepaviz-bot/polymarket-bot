@@ -65,6 +65,19 @@ Analizza notizie in tempo reale per stimare la probabilità vera:
 | VADER (default) | `vaderSentiment` | Gratis | Buona |
 | LLM (opzionale) | OpenAI/Groq API | ~$0.01/query | Ottima |
 
+#### D) Ensemble (v6.1)
+Combina **tutte e tre le strategie** — trada solo quando almeno **2 su 3 concordano**:
+
+```
+MeanRev=BUY_YES + ProbEdge=HOLD + Sentiment=BUY_YES → 2/3 agree → TRADE ✓
+MeanRev=BUY_YES + ProbEdge=HOLD + Sentiment=HOLD    → 1/3 agree → SKIP  ✗
+MeanRev=BUY_YES + ProbEdge=BUY_YES + Sentiment=BUY_YES → 3/3 agree → TRADE ✓ (alta confidenza)
+```
+
+- **Meno trade** ma più sicuri (filtro a consenso)
+- **Confidenza** = media delle strategie concordanti
+- Il segnale mostra il voto di ognuna: `Ensemble(MeanRev+Sentiment): 2/3 agree`
+
 ### 3. Sentiment Engine (`sentiment_engine.py`) — v4.0
 
 Orchestra il flusso: **keyword extraction → news fetch → sentiment analysis → probability estimation**.
@@ -191,6 +204,12 @@ python -m polymarket_bot --timeframe long --strategy sentiment --adaptive
 
 # 13. Override intervallo su qualsiasi timeframe
 python -m polymarket_bot --timeframe long --interval 600 --cycles 20  # 10 min custom
+
+# 14. Strategia Ensemble — combina tutte e 3, trada solo con consenso 2/3
+python -m polymarket_bot --strategy ensemble --timeframe mid --adaptive
+
+# 15. Ensemble long-term con Kelly sizing
+python -m polymarket_bot --strategy ensemble --timeframe long --adaptive --cycles 20
 ```
 
 ### Opzioni CLI
@@ -200,7 +219,7 @@ python -m polymarket_bot --timeframe long --interval 600 --cycles 20  # 10 min c
 | `--timeframe` | `short` | Timeframe: `short` (30s), `mid` (5min), `long` (30min) |
 | `--cycles` | da preset | Numero di cicli (default dal timeframe) |
 | `--interval` | da preset | Secondi tra cicli (default dal timeframe) |
-| `--strategy` | `mean_reversion` | Strategia: `mean_reversion`, `prob`, o `sentiment` |
+| `--strategy` | `mean_reversion` | Strategia: `mean_reversion`, `prob`, `sentiment`, o `ensemble` |
 | `--capital` | 200.0 | Capitale iniziale in € |
 | `--markets` | 200 | Numero mercati da fetchare per ciclo (paginazione automatica) |
 | `--llm` | `None` | Provider LLM per sentiment: `openai` o `groq` (default: VADER) |
@@ -257,6 +276,7 @@ history/
 | **v4.0** | **Sentiment Engine** — analisi notizie con VADER/LLM, strategia sentiment_edge |
 | **v5.0** | **Adaptive Engine** — storage persistente, training adattivo, Kelly sizing dinamico |
 | **v6.0** | **Multi-Timeframe** — mid/long term, take-profit variabile, trailing stop-loss |
+| **v6.1** | **Ensemble Strategy** — combina tutte e 3 le strategie, trada solo con consenso ≥2/3 |
 
 ---
 

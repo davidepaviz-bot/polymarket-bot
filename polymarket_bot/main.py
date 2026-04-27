@@ -26,6 +26,7 @@ from polymarket_bot.strategy import (
     MeanReversionStrategy,
     ProbabilisticEdgeStrategy,
     SentimentEdgeStrategy,
+    EnsembleStrategy,
     Side,
     filter_volatile_markets,
 )
@@ -275,7 +276,20 @@ def run_bot(
 
     sentiment_engine: SentimentEngine | None = None
 
-    if strategy_name == "sentiment":
+    if strategy_name == "ensemble":
+        sentiment_engine = SentimentEngine(
+            llm_provider=llm_provider,
+            sentiment_weight=0.30,
+            max_articles=8,
+        )
+        mode_label = f"LLM ({llm_provider})" if llm_provider else "VADER"
+        mean_rev = MeanReversionStrategy(low_threshold=0.40, high_threshold=0.60)
+        prob_edge = ProbabilisticEdgeStrategy(min_edge=min_edge)
+        sent_strat = SentimentEdgeStrategy(sentiment_engine, min_edge=min_edge)
+        strategy = EnsembleStrategy(mean_rev, prob_edge, sent_strat, min_agree=2)
+        print(f"  Ensemble   : MeanRev + ProbEdge + Sentiment({mode_label})")
+        print(f"  Consensus  : ≥2/3 must agree to trade")
+    elif strategy_name == "sentiment":
         sentiment_engine = SentimentEngine(
             llm_provider=llm_provider,
             sentiment_weight=0.30,
@@ -457,15 +471,20 @@ def run_bot(
                 candidates = volatile
 
             # For prob-edge, generate estimates using price momentum
+            prob_strat = None
             if isinstance(strategy, ProbabilisticEdgeStrategy):
+                prob_strat = strategy
+            elif isinstance(strategy, EnsembleStrategy):
+                prob_strat = strategy.prob_edge
+            if prob_strat is not None:
                 for m in candidates:
                     delta = tracker.price_delta(m["id"])
                     trend = delta * 0.5
                     noise = random.gauss(0, 0.06)
                     est = max(0.01, min(0.99, m["yes_price"] + trend + noise))
-                    strategy.set_estimate(m["id"], est)
+                    prob_strat.set_estimate(m["id"], est)
 
-            # For sentiment strategy, clear cache each cycle for fresh news
+            # For sentiment/ensemble strategy, clear cache each cycle for fresh news
             if sentiment_engine is not None:
                 sentiment_engine.clear_cache()
 
@@ -636,8 +655,8 @@ def main():
                         help="Trading cycles (default: from timeframe preset)")
     parser.add_argument("--interval", type=int, default=None,
                         help="Seconds between cycles (default: from timeframe preset)")
-    parser.add_argument("--strategy", choices=["mean_reversion", "prob", "sentiment"], default="mean_reversion",
-                        help="Strategy: mean_reversion, prob, or sentiment")
+    parser.add_argument("--strategy", choices=["mean_reversion", "prob", "sentiment", "ensemble"], default="mean_reversion",
+                        help="Strategy: mean_reversion, prob, sentiment, or ensemble (all 3 combined)")
     parser.add_argument("--llm", choices=["openai", "groq"], default=None,
                         help="LLM provider for sentiment strategy (default: VADER, no API key needed)")
     parser.add_argument("--capital", type=float, default=200.0, help="Initial capital in \u20ac (default: 200)")
