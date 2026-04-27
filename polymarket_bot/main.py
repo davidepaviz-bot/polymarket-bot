@@ -256,6 +256,10 @@ def run_bot(
                 if last is not None:
                     print(f"  Market delisted \u2014 closing at {last:.4f}")
                     trader.close_position_at(last, reason="market-delisted")
+                    _save_trade_to_history(
+                        trader, history_db, run_id, strategy_name,
+                        _trade_metadata, "market-delisted", hold_counter,
+                    )
                     hold_counter = 0
             else:
                 api_mid = current_market["yes_price"]
@@ -373,7 +377,8 @@ def run_bot(
                         avg_loss=stats.avg_loss_pnl if stats.avg_loss_pnl > 0 else 1.0,
                         balance=trader.balance,
                     )
-                    print(f"    Kelly size=\u20ac{trade_size:.2f} ({trade_size/trader.balance*100:.1f}% of balance)")
+                    pct = trade_size / trader.balance * 100 if trader.balance > 0 else 0.0
+                    print(f"    Kelly size=\u20ac{trade_size:.2f} ({pct:.1f}% of balance)")
                 else:
                     trade_size = None  # use default fixed 10%
 
