@@ -2,7 +2,7 @@
 
 Bot modulare per **paper trading** su [Polymarket](https://polymarket.com) — un prediction market dove il prezzo rappresenta una probabilità (0–1) e si tradano eventi YES/NO.
 
-> ⚠️ **Nessun soldo reale viene utilizzato.** Tutto il trading è simulato con un capitale iniziale di €200.
+
 
 ---
 
@@ -206,6 +206,3 @@ Il sistema è progettato per essere facilmente estendibile:
 
 ---
 
-## ⚠️ Disclaimer
-
-Questo progetto è **puramente educativo**. Non utilizza soldi reali, wallet crypto, o API di exchange. È pensato per simulare e comprendere le dinamiche dei prediction market.
