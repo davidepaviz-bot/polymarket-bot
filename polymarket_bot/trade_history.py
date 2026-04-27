@@ -357,9 +357,9 @@ def kelly_size(
     avg_win: float,
     avg_loss: float,
     balance: float,
-    min_pct: float = 0.03,
-    max_pct: float = 0.25,
-    fraction: float = 0.5,
+    min_pct: float = 0.05,
+    max_pct: float = 0.30,
+    fraction: float = 0.65,
 ) -> float:
     """Calculate position size using fractional Kelly Criterion.
 
@@ -385,11 +385,11 @@ def kelly_size(
     balance : float
         Current account balance
     min_pct : float
-        Minimum position as % of balance (default 3%)
+        Minimum position as % of balance (default 5%)
     max_pct : float
-        Maximum position as % of balance (default 25%)
+        Maximum position as % of balance (default 30%)
     fraction : float
-        Kelly fraction (0.5 = half-Kelly, safer)
+        Kelly fraction (0.65 = aggressive half-Kelly)
 
     Returns
     -------
@@ -414,6 +414,6 @@ def kelly_size(
     return max(0.01, size)
 
 
-def fixed_size(balance: float, pct: float = 0.10) -> float:
+def fixed_size(balance: float, pct: float = 0.15) -> float:
     """Original fixed position sizing (fallback)."""
     return round(balance * pct, 2)

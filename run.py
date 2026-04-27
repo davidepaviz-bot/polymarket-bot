@@ -14,8 +14,9 @@ run_bot(
     # Timeframe: "short" (30s), "mid" (5 min), "long" (30 min)
     timeframe="mid",
 
-    # Strategia: "mean_reversion", "prob", "sentiment"
-    strategy_name="sentiment",
+    # Strategia: "mean_reversion", "prob", "sentiment", "ensemble"
+    # "ensemble" combina tutte e 3: trada solo quando almeno 2/3 concordano
+    strategy_name="ensemble",
 
     # Adaptive: True = Kelly sizing + parametri appresi dallo storico
     adaptive=True,
