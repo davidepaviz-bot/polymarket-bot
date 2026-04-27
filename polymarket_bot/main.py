@@ -24,10 +24,12 @@ from polymarket_bot.market_reader import fetch_markets, save_snapshot_csv
 from polymarket_bot.strategy import (
     MeanReversionStrategy,
     ProbabilisticEdgeStrategy,
+    SentimentEdgeStrategy,
     Side,
     filter_volatile_markets,
 )
 from polymarket_bot.paper_trader import PaperTrader
+from polymarket_bot.sentiment_engine import SentimentEngine
 
 
 # ── Market Microstructure ──────────────────────────────────────────
@@ -135,11 +137,12 @@ def run_bot(
     interval: int = 30,
     strategy_name: str = "mean_reversion",
     capital: float = 200.0,
-    market_limit: int = 50,
+    market_limit: int = 200,
+    llm_provider: str | None = None,
 ):
     """Main trading loop — short-term, price-movement based."""
     print("=" * 60)
-    print("  POLYMARKET PAPER TRADING BOT  v3.0 (Short-Term)")
+    print("  POLYMARKET PAPER TRADING BOT  v4.0 (Short-Term + Sentiment)")
     print(f"  Strategy   : {strategy_name}")
     print(f"  Capital    : \u20ac{capital:.2f}")
     print(f"  Cycles     : {cycles}")
@@ -150,7 +153,18 @@ def run_bot(
     trader = PaperTrader(initial_capital=capital)
     tracker = PriceTracker()
 
-    if strategy_name == "prob":
+    sentiment_engine: SentimentEngine | None = None
+
+    if strategy_name == "sentiment":
+        sentiment_engine = SentimentEngine(
+            llm_provider=llm_provider,
+            sentiment_weight=0.30,
+            max_articles=8,
+        )
+        mode_label = f"LLM ({llm_provider})" if llm_provider else "VADER"
+        strategy = SentimentEdgeStrategy(sentiment_engine, min_edge=0.08)
+        print(f"  Sentiment  : {mode_label}")
+    elif strategy_name == "prob":
         strategy = ProbabilisticEdgeStrategy(min_edge=0.08)
     else:
         strategy = MeanReversionStrategy(low_threshold=0.40, high_threshold=0.60)
@@ -181,8 +195,8 @@ def run_bot(
             continue
 
         # 2. Filter for tradeable markets
-        markets = filter_volatile_markets(all_markets, min_price=0.15, max_price=0.85)
-        print(f"  Fetched {len(all_markets)} markets, {len(markets)} tradeable (price 0.15-0.85)")
+        markets = filter_volatile_markets(all_markets, min_price=0.10, max_price=0.90, min_volume=1_000)
+        print(f"  Fetched {len(all_markets)} markets, {len(markets)} tradeable (price 0.10-0.90)")
         save_snapshot_csv(all_markets)
 
         if not markets:
@@ -273,6 +287,10 @@ def run_bot(
                     est = max(0.01, min(0.99, m["yes_price"] + trend + noise))
                     strategy.set_estimate(m["id"], est)
 
+            # For sentiment strategy, clear cache each cycle for fresh news
+            if sentiment_engine is not None:
+                sentiment_engine.clear_cache()
+
             signals = []
             for m in candidates:
                 sig = strategy.evaluate(m)
@@ -340,10 +358,12 @@ def main():
     parser = argparse.ArgumentParser(description="Polymarket Paper Trading Bot (Short-Term)")
     parser.add_argument("--cycles", type=int, default=20, help="Trading cycles (default: 20)")
     parser.add_argument("--interval", type=int, default=30, help="Seconds between cycles (default: 30)")
-    parser.add_argument("--strategy", choices=["mean_reversion", "prob"], default="mean_reversion",
-                        help="Strategy: mean_reversion or prob")
+    parser.add_argument("--strategy", choices=["mean_reversion", "prob", "sentiment"], default="mean_reversion",
+                        help="Strategy: mean_reversion, prob, or sentiment")
+    parser.add_argument("--llm", choices=["openai", "groq"], default=None,
+                        help="LLM provider for sentiment strategy (default: VADER, no API key needed)")
     parser.add_argument("--capital", type=float, default=200.0, help="Initial capital in \u20ac (default: 200)")
-    parser.add_argument("--markets", type=int, default=50, help="Markets to fetch per cycle (default: 50)")
+    parser.add_argument("--markets", type=int, default=200, help="Markets to fetch per cycle (default: 200)")
     args = parser.parse_args()
 
     run_bot(
@@ -352,6 +372,7 @@ def main():
         strategy_name=args.strategy,
         capital=args.capital,
         market_limit=args.markets,
+        llm_provider=args.llm,
     )
 
 

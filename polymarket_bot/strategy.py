@@ -1,13 +1,17 @@
 """
 Strategy Engine – signal generation for Polymarket paper trading.
 
-Implements two strategies:
+Implements three strategies:
   A) Mean Reversion: buy YES when cheap, buy NO when expensive.
   B) Probabilistic Edge: compare market price against an estimated
      probability and trade when the edge exceeds a threshold.
+  C) Sentiment Edge: use news sentiment to estimate true probability
+     and trade when the edge exceeds a threshold.
 
 Includes volatility filter to focus on markets with real opportunity.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
@@ -32,9 +36,9 @@ class Signal:
 
 def filter_volatile_markets(
     markets: list[dict],
-    min_price: float = 0.15,
-    max_price: float = 0.85,
-    min_volume: float = 10_000,
+    min_price: float = 0.10,
+    max_price: float = 0.90,
+    min_volume: float = 1_000,
 ) -> list[dict]:
     """
     Filter markets to those with real trading opportunity:
@@ -161,5 +165,99 @@ class ProbabilisticEdgeStrategy:
             yes_price=yes_price,
             no_price=market["no_price"],
             reason=f"Prob-edge: edge {edge:+.2f} within ±{self.min_edge}",
+            confidence=0.0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Strategy C – Sentiment Edge (news-driven)
+# ---------------------------------------------------------------------------
+
+class SentimentEdgeStrategy:
+    """Trade when news sentiment suggests the market is mispriced.
+
+    Requires a ``SentimentEngine`` instance (passed at init) that fetches
+    news and computes probability estimates.  The strategy trades when
+    the edge (estimated_prob - market_price) exceeds *min_edge*.
+
+    Parameters
+    ----------
+    sentiment_engine : SentimentEngine
+        Engine that provides ``analyze(market)`` → ``SentimentResult``.
+    min_edge : float
+        Minimum |edge| required to generate a signal (default 0.08).
+    min_articles : int
+        Ignore markets where fewer than this many articles were found.
+    """
+
+    def __init__(
+        self,
+        sentiment_engine: "SentimentEngine",
+        min_edge: float = 0.08,
+        min_articles: int = 1,
+    ):
+        from polymarket_bot.sentiment_engine import SentimentEngine
+        self.engine: SentimentEngine = sentiment_engine
+        self.min_edge = min_edge
+        self.min_articles = min_articles
+
+    def evaluate(self, market: dict) -> Signal:
+        market_id = market["id"]
+        yes_price = market["yes_price"]
+
+        result = self.engine.analyze(market)
+
+        if result.articles_found < self.min_articles:
+            return Signal(
+                side=Side.HOLD,
+                market_id=market_id,
+                question=market["question"],
+                yes_price=yes_price,
+                no_price=market["no_price"],
+                reason=f"Sentiment: only {result.articles_found} articles (need {self.min_articles})",
+                confidence=0.0,
+            )
+
+        edge = result.edge
+        mode = "LLM" if result.llm_used else "VADER"
+
+        if edge > self.min_edge:
+            return Signal(
+                side=Side.BUY_YES,
+                market_id=market_id,
+                question=market["question"],
+                yes_price=yes_price,
+                no_price=market["no_price"],
+                reason=(
+                    f"Sentiment({mode}): est={result.estimated_probability:.2f}, "
+                    f"mkt={yes_price:.2f}, edge={edge:+.2f}, "
+                    f"sent={result.avg_sentiment:+.2f}, news={result.articles_found}"
+                ),
+                confidence=min(abs(edge), 1.0),
+            )
+        if edge < -self.min_edge:
+            return Signal(
+                side=Side.BUY_NO,
+                market_id=market_id,
+                question=market["question"],
+                yes_price=yes_price,
+                no_price=market["no_price"],
+                reason=(
+                    f"Sentiment({mode}): est={result.estimated_probability:.2f}, "
+                    f"mkt={yes_price:.2f}, edge={edge:+.2f}, "
+                    f"sent={result.avg_sentiment:+.2f}, news={result.articles_found}"
+                ),
+                confidence=min(abs(edge), 1.0),
+            )
+        return Signal(
+            side=Side.HOLD,
+            market_id=market_id,
+            question=market["question"],
+            yes_price=yes_price,
+            no_price=market["no_price"],
+            reason=(
+                f"Sentiment({mode}): edge {edge:+.2f} within ±{self.min_edge}, "
+                f"sent={result.avg_sentiment:+.2f}, news={result.articles_found}"
+            ),
             confidence=0.0,
         )
