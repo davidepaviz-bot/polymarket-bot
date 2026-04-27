@@ -95,15 +95,15 @@ def _micro_price(
     half_spread = _spread_for(volume, mid)
     prev_mom = _momentum.get(market_id, 0.0)
     # Order-flow shock scaled by spread and time horizon
-    shock_scale = half_spread * 2.5 * math.sqrt(time_scale)
+    shock_scale = half_spread * 3.5 * math.sqrt(time_scale)
     new_noise = random.gauss(0, shock_scale)
     # Momentum carry: longer timeframes have stronger trends
     carry = min(0.75, 0.50 + time_scale * 0.03)
     mom = prev_mom * carry + new_noise * (1.0 - carry)
     # Occasional large order block (probability scales with time)
-    whale_prob = min(0.20, 0.08 * math.sqrt(time_scale))
+    whale_prob = min(0.25, 0.12 * math.sqrt(time_scale))
     if random.random() < whale_prob:
-        mom += random.choice([-1, 1]) * abs(random.gauss(0, half_spread * 4 * math.sqrt(time_scale)))
+        mom += random.choice([-1, 1]) * abs(random.gauss(0, half_spread * 5 * math.sqrt(time_scale)))
     # Light mean-reversion toward mid to prevent runaway drift
     mom *= 0.97
     _momentum[market_id] = mom
@@ -116,10 +116,10 @@ _TIMEFRAME_PRESETS = {
     "short": {
         "interval": 30,
         "cycles": 20,
-        "take_profit_base": 0.03,   # 3% base TP
-        "take_profit_max": 0.05,    # 5% max TP (with high edge)
-        "stop_loss": 0.05,          # 5% SL
-        "max_hold": 8,
+        "take_profit_base": 0.02,   # 2% base TP (aggressive)
+        "take_profit_max": 0.04,    # 4% max TP
+        "stop_loss": 0.08,          # 8% SL (wider to avoid premature stops)
+        "max_hold": 12,
         "trailing_stop": False,
         "trailing_activation": 0.0,
         "trailing_distance": 0.0,
@@ -129,26 +129,26 @@ _TIMEFRAME_PRESETS = {
     "mid": {
         "interval": 300,            # 5 min
         "cycles": 30,
-        "take_profit_base": 0.05,   # 5% base TP
-        "take_profit_max": 0.12,    # 12% max TP
-        "stop_loss": 0.08,          # 8% SL (wider)
-        "max_hold": 20,             # hold up to 20 cycles (~100 min)
+        "take_profit_base": 0.03,   # 3% base TP (aggressive)
+        "take_profit_max": 0.10,    # 10% max TP
+        "stop_loss": 0.12,          # 12% SL (wider to ride volatility)
+        "max_hold": 15,             # hold up to 15 cycles (~75 min)
         "trailing_stop": True,
-        "trailing_activation": 0.03, # activate after +3%
-        "trailing_distance": 0.02,   # trail 2% below peak
+        "trailing_activation": 0.04, # activate after +4%
+        "trailing_distance": 0.025,  # trail 2.5% below peak
         "time_scale": 3.0,
         "label": "Mid-term (5min)",
     },
     "long": {
         "interval": 1800,           # 30 min
         "cycles": 30,
-        "take_profit_base": 0.08,   # 8% base TP
-        "take_profit_max": 0.20,    # 20% max TP
-        "stop_loss": 0.12,          # 12% SL (very wide)
-        "max_hold": 30,             # hold up to 30 cycles (~15 hours)
+        "take_profit_base": 0.05,   # 5% base TP (aggressive)
+        "take_profit_max": 0.18,    # 18% max TP
+        "stop_loss": 0.15,          # 15% SL (very wide to ride trends)
+        "max_hold": 20,             # hold up to 20 cycles (~10 hours)
         "trailing_stop": True,
-        "trailing_activation": 0.05, # activate after +5%
-        "trailing_distance": 0.03,   # trail 3% below peak
+        "trailing_activation": 0.06, # activate after +6%
+        "trailing_distance": 0.035,  # trail 3.5% below peak
         "time_scale": 8.0,
         "label": "Long-term (30min)",
     },
@@ -246,7 +246,7 @@ def run_bot(
     print(f"  Timeframe  : {preset['label']}")
     print(f"  Cycles     : {cycles}")
     print(f"  Interval   : {interval}s")
-    print(f"  Sizing     : {'Kelly (adaptive)' if adaptive else 'Fixed 10%'}")
+    print(f"  Sizing     : {'Kelly (adaptive, 5-30%)' if adaptive else 'Fixed 15%'}")
     print(f"  Take Profit: {preset['take_profit_base']:.0%}-{preset['take_profit_max']:.0%} (variable)")
     print(f"  Stop Loss  : {preset['stop_loss']:.0%}")
     if preset['trailing_stop']:
@@ -272,7 +272,7 @@ def run_bot(
     tracker = PriceTracker()
 
     # Use adaptive min-edge if enough data
-    min_edge = stats.recommended_min_edge if adaptive and history_db.count >= 10 else 0.08
+    min_edge = stats.recommended_min_edge if adaptive and history_db.count >= 10 else 0.05
 
     sentiment_engine: SentimentEngine | None = None
 
@@ -283,7 +283,7 @@ def run_bot(
             max_articles=8,
         )
         mode_label = f"LLM ({llm_provider})" if llm_provider else "VADER"
-        mean_rev = MeanReversionStrategy(low_threshold=0.40, high_threshold=0.60)
+        mean_rev = MeanReversionStrategy(low_threshold=0.48, high_threshold=0.52)
         prob_edge = ProbabilisticEdgeStrategy(min_edge=min_edge)
         sent_strat = SentimentEdgeStrategy(sentiment_engine, min_edge=min_edge)
         strategy = EnsembleStrategy(mean_rev, prob_edge, sent_strat, min_agree=2)
@@ -301,7 +301,7 @@ def run_bot(
     elif strategy_name == "prob":
         strategy = ProbabilisticEdgeStrategy(min_edge=min_edge)
     else:
-        strategy = MeanReversionStrategy(low_threshold=0.40, high_threshold=0.60)
+        strategy = MeanReversionStrategy(low_threshold=0.45, high_threshold=0.55)
 
     if adaptive:
         print(f"  Min edge   : {min_edge:.0%} {'(learned)' if history_db.count >= 10 else '(default)'}")

@@ -91,8 +91,8 @@ Orchestra il flusso: **keyword extraction → news fetch → sentiment analysis 
 
 - Capitale iniziale: **€200**
 - Max **1 posizione** aperta alla volta
-- Position sizing: **10% fisso** o **Kelly Criterion** (adattivo)
-- **Stop-loss** automatico al 5% (short-term)
+- Position sizing: **15% fisso** o **Kelly Criterion** (adattivo, 5-30%)
+- **Stop-loss** automatico al 8% (short-term)
 - Tracking completo: entry/exit price, PnL, equity curve
 
 ### 5. Trade History & Adaptive Engine (`trade_history.py`) — v5.0
@@ -128,9 +128,9 @@ Il cuore del bot — supporta tre timeframe con parametri ottimizzati:
 
 | Timeframe | Intervallo | Take Profit | Stop Loss | Max Hold | Trailing Stop |
 |---|---|---|---|---|---|
-| **short** | 30s | 3-5% (variabile) | 5% | 8 cicli | No |
-| **mid** | 5 min | 5-12% (variabile) | 8% | 20 cicli | Sì (+3%, trail 2%) |
-| **long** | 30 min | 8-20% (variabile) | 12% | 30 cicli | Sì (+5%, trail 3%) |
+| **short** | 30s | 2-4% (variabile) | 8% | 12 cicli | No |
+| **mid** | 5 min | 3-10% (variabile) | 12% | 15 cicli | Sì (+4%, trail 2.5%) |
+| **long** | 30 min | 5-18% (variabile) | 15% | 20 cicli | Sì (+6%, trail 3.5%) |
 
 #### Take Profit Variabile
 Il target di take-profit scala con:

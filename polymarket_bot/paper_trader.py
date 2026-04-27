@@ -52,7 +52,7 @@ class PaperTrader:
     def __init__(
         self,
         initial_capital: float = 200.0,
-        max_position_pct: float = 0.10,
+        max_position_pct: float = 0.15,
         stop_loss_pct: float = 0.30,
     ):
         self.initial_capital = initial_capital
@@ -65,7 +65,7 @@ class PaperTrader:
         self.trade_counter = 0
 
         # Risk parameters
-        self.max_position_pct = max_position_pct  # max 10% of capital per trade
+        self.max_position_pct = max_position_pct  # max 15% of capital per trade
         self.stop_loss_pct = stop_loss_pct         # close if price moves 30% against us
 
     # ------------------------------------------------------------------
