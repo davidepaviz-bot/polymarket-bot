@@ -109,22 +109,32 @@ Dimensiona le posizioni in base alla probabilità e allo storico:
 
 Formula: `f* = (p × b - q) / b` dove p = win probability, b = avg_win/avg_loss. Usa **half-Kelly** per sicurezza.
 
-### 6. Short-Term Trading Engine (`main.py` v5.0)
+### 6. Multi-Timeframe Engine (`main.py` v6.0)
 
-Il cuore del bot — orientato al **breve termine**:
+Il cuore del bot — supporta tre timeframe con parametri ottimizzati:
 
-| Meccanismo | Descrizione |
-|---|---|
-| **Take Profit** | Chiude se il prezzo si muove ≥3% a nostro favore |
-| **Stop Loss** | Chiude se il prezzo si muove ≥5% contro di noi |
-| **Max Hold** | Forza la chiusura dopo 10 cicli per liberare capitale |
-| **Diversificazione** | Non trada lo stesso mercato due volte di fila (ultimi 5) |
-| **Preferenza volatilità** | Preferisce mercati che stanno già mostrando movimento |
-| **Chiusura fine sessione** | Chiude ogni posizione aperta alla fine della run |
+| Timeframe | Intervallo | Take Profit | Stop Loss | Max Hold | Trailing Stop |
+|---|---|---|---|---|---|
+| **short** | 30s | 3-5% (variabile) | 5% | 8 cicli | No |
+| **mid** | 5 min | 5-12% (variabile) | 8% | 20 cicli | Sì (+3%, trail 2%) |
+| **long** | 30 min | 8-20% (variabile) | 12% | 30 cicli | Sì (+5%, trail 3%) |
+
+#### Take Profit Variabile
+Il target di take-profit scala con:
+- **Edge strength**: edge alto → TP più alto (lascia correre i winner)
+- **Tempo di hold**: dopo 75% del max-hold, TP scende per prendere profitto prima della chiusura forzata
+
+#### Trailing Stop-Loss (mid/long)
+Protegge i guadagni quando il prezzo si muove a favore:
+1. Si **attiva** dopo un guadagno minimo (es. +3% per mid)
+2. **Segue** il prezzo mantenendo una distanza fissa dal picco (es. 2%)
+3. Se il prezzo ritraccia della distanza trailing → chiude con profitto
+
+Esempio: entry=0.20, prezzo sale a 0.24 (+20%), poi scende a 0.228 → trailing stop chiude con +14% invece di rischiare lo stop-loss
 
 **Nessuna simulazione di risoluzione** — il profitto/perdita deriva interamente dal movimento reale dei prezzi su Polymarket.
 
-### 6. Logging System
+### 7. Logging System
 
 - Trade log salvato in `logs/trade_log.csv`
 - Equity curve salvata in `logs/equity_curve.json`
@@ -169,24 +179,35 @@ python -m polymarket_bot --strategy sentiment --adaptive --cycles 50
 python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 1
 python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 2 (impara da run 1)
 python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 3 (impara da run 1+2)
+
+# 11. Mid-term con sentiment (v6.0) — 5 min tra cicli, trailing stop
+python -m polymarket_bot --timeframe mid --strategy sentiment --adaptive
+
+# 12. Long-term — 30 min tra cicli, TP 8-20%, trailing stop aggressivo
+python -m polymarket_bot --timeframe long --strategy sentiment --adaptive
+
+# 13. Override intervallo su qualsiasi timeframe
+python -m polymarket_bot --timeframe long --interval 600 --cycles 20  # 10 min custom
 ```
 
 ### Opzioni CLI
 
 | Flag | Default | Descrizione |
 |---|---|---|
-| `--cycles` | 20 | Numero di cicli di trading |
-| `--interval` | 30 | Secondi tra un ciclo e l'altro |
+| `--timeframe` | `short` | Timeframe: `short` (30s), `mid` (5min), `long` (30min) |
+| `--cycles` | da preset | Numero di cicli (default dal timeframe) |
+| `--interval` | da preset | Secondi tra cicli (default dal timeframe) |
 | `--strategy` | `mean_reversion` | Strategia: `mean_reversion`, `prob`, o `sentiment` |
 | `--capital` | 200.0 | Capitale iniziale in € |
 | `--markets` | 200 | Numero mercati da fetchare per ciclo (paginazione automatica) |
 | `--llm` | `None` | Provider LLM per sentiment: `openai` o `groq` (default: VADER) |
 | `--adaptive` | `False` | Abilita modo adattivo: Kelly sizing + parametri appresi |
 
-### Consigli per Short-Term Trading
+### Consigli per Timeframe
 
-- **Intervallo 30-60s**: permette di catturare micro-movimenti di prezzo reali
-- **Cicli 30-50**: sessioni più lunghe = più opportunità di trading
+- **Short** (30s): per testare strategie velocemente. Lo spread domina, pochi profitti reali
+- **Mid** (5 min): buon compromesso tra velocità e movimenti reali. Il trailing stop protegge i guadagni
+- **Long** (30 min): cattura trend più ampi. Meno trade ma più significativi. Ideale con `--adaptive`
 - **Mercati volatili**: il bot preferisce automaticamente mercati con prezzi che si stanno muovendo
 
 ---
@@ -232,6 +253,7 @@ history/
 | **v3.1** | **Pool ampliato** — paginazione API (fino a 500+ mercati), filtri rilassati (0.10-0.90, vol>=1K) |
 | **v4.0** | **Sentiment Engine** — analisi notizie con VADER/LLM, strategia sentiment_edge |
 | **v5.0** | **Adaptive Engine** — storage persistente, training adattivo, Kelly sizing dinamico |
+| **v6.0** | **Multi-Timeframe** — mid/long term, take-profit variabile, trailing stop-loss |
 
 ---
 
