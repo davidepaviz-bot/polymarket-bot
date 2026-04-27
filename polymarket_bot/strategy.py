@@ -315,6 +315,7 @@ class EnsembleStrategy:
             Side.BUY_NO: [],
         }
         vote_reasons: list[str] = []
+        sentiment_reason = ""
 
         for name, strat in self.strategies:
             sig = strat.evaluate(market)
@@ -322,6 +323,8 @@ class EnsembleStrategy:
             vote_reasons.append(f"{name}={short}")
             if sig.side in votes:
                 votes[sig.side].append((name, sig.confidence))
+            if name == "Sentiment":
+                sentiment_reason = sig.reason
 
         # Find the side with most agreement
         best_side = Side.HOLD
@@ -347,12 +350,17 @@ class EnsembleStrategy:
         avg_conf = sum(c for _, c in best_voters) / len(best_voters)
         agree_names = "+".join(n for n, _ in best_voters)
 
+        # Include sentiment metadata so adaptive engine can parse sent=/est=/news=
+        reason = f"Ensemble({agree_names}): {len(best_voters)}/3 agree | {votes_str}"
+        if sentiment_reason:
+            reason = f"{reason} | {sentiment_reason}"
+
         return Signal(
             side=best_side,
             market_id=market_id,
             question=market["question"],
             yes_price=yes_price,
             no_price=market["no_price"],
-            reason=f"Ensemble({agree_names}): {len(best_voters)}/3 agree | {votes_str}",
+            reason=reason,
             confidence=min(avg_conf, 1.0),
         )
