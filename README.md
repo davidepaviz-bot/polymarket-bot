@@ -14,7 +14,8 @@ polymarket_bot/
 ├── strategy.py        # Motore segnali: Mean Reversion + Prob Edge + Sentiment Edge
 ├── sentiment_engine.py # News fetching + VADER/LLM sentiment analysis
 ├── paper_trader.py    # Paper trading engine + risk management
-├── main.py            # Entry point — orchestra l'intero loop (short-term v4.0)
+├── trade_history.py   # Storage persistente + adaptive training + Kelly sizing
+├── main.py            # Entry point — orchestra l'intero loop (v5.0 adaptive)
 └── __main__.py        # Permette `python -m polymarket_bot`
 ```
 
@@ -77,11 +78,38 @@ Orchestra il flusso: **keyword extraction → news fetch → sentiment analysis 
 
 - Capitale iniziale: **€200**
 - Max **1 posizione** aperta alla volta
-- Position sizing: **10% del capitale** per trade
+- Position sizing: **10% fisso** o **Kelly Criterion** (adattivo)
 - **Stop-loss** automatico al 5% (short-term)
 - Tracking completo: entry/exit price, PnL, equity curve
 
-### 5. Short-Term Trading Engine (`main.py` v4.0)
+### 5. Trade History & Adaptive Engine (`trade_history.py`) — v5.0
+
+Sistema di storage persistente e training adattivo:
+
+#### Storage Persistente
+- Ogni trade viene salvato in `history/trade_history.json` con metadati completi
+- I dati si accumulano tra le sessioni — il bot **impara** dalla propria storia
+- Metadati per ogni trade: sentiment score, edge, categoria mercato, exit reason, hold cycles
+
+#### Training Adattivo
+Analizza la performance storica per ottimizzare i parametri:
+- **Edge band analysis**: win rate per fascia di edge (low 8-12%, mid 12-18%, high >18%)
+- **Sentiment band analysis**: performance per sentiment negativo/neutrale/positivo
+- **Category tracking**: win rate per categoria (NBA, soccer, politics, crypto...)
+- **Raccomandazioni automatiche**: alza min-edge se le trade a basso edge perdono, evita categorie con <20% win rate
+
+#### Kelly Criterion Sizing
+Dimensiona le posizioni in base alla probabilità e allo storico:
+
+| Parametro | Formula |
+|---|---|
+| **Edge alto + buon win rate** | Posizione più grande (fino al 25%) |
+| **Edge basso + win rate basso** | Posizione minima (3%) |
+| **Nessuno storico** | Default fisso 10% |
+
+Formula: `f* = (p × b - q) / b` dove p = win probability, b = avg_win/avg_loss. Usa **half-Kelly** per sicurezza.
+
+### 6. Short-Term Trading Engine (`main.py` v5.0)
 
 Il cuore del bot — orientato al **breve termine**:
 
@@ -133,6 +161,14 @@ python -m polymarket_bot --strategy sentiment --llm openai --cycles 30
 # 8. Sentiment con Groq (quasi gratis, molto veloce)
 export GROQ_API_KEY="gsk_..."
 python -m polymarket_bot --strategy sentiment --llm groq --cycles 30
+
+# 9. Modalità adattiva con Kelly sizing (v5.0)
+python -m polymarket_bot --strategy sentiment --adaptive --cycles 50
+
+# 10. Run multipla per accumulare dati di training
+python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 1
+python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 2 (impara da run 1)
+python -m polymarket_bot --strategy sentiment --adaptive --cycles 30  # run 3 (impara da run 1+2)
 ```
 
 ### Opzioni CLI
@@ -145,6 +181,7 @@ python -m polymarket_bot --strategy sentiment --llm groq --cycles 30
 | `--capital` | 200.0 | Capitale iniziale in € |
 | `--markets` | 200 | Numero mercati da fetchare per ciclo (paginazione automatica) |
 | `--llm` | `None` | Provider LLM per sentiment: `openai` o `groq` (default: VADER) |
+| `--adaptive` | `False` | Abilita modo adattivo: Kelly sizing + parametri appresi |
 
 ### Consigli per Short-Term Trading
 
@@ -177,6 +214,10 @@ data/
 logs/
 ├── trade_log.csv           # Registro completo dei trade
 └── equity_curve.json       # Evoluzione del capitale
+
+history/
+├── trade_history.json      # Database persistente di tutti i trade (si accumula)
+└── training_stats.json     # Statistiche apprese dall'adaptive engine
 ```
 
 ---
@@ -190,6 +231,7 @@ logs/
 | **v3.0** | **Short-term** — solo movimenti di prezzo reali, take-profit/stop-loss, max hold |
 | **v3.1** | **Pool ampliato** — paginazione API (fino a 500+ mercati), filtri rilassati (0.10-0.90, vol>=1K) |
 | **v4.0** | **Sentiment Engine** — analisi notizie con VADER/LLM, strategia sentiment_edge |
+| **v5.0** | **Adaptive Engine** — storage persistente, training adattivo, Kelly sizing dinamico |
 
 ---
 

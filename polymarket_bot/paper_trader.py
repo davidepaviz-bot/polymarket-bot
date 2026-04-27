@@ -76,10 +76,11 @@ class PaperTrader:
     def has_open_position(self) -> bool:
         return self.position is not None
 
-    def process_signal(self, signal: Signal) -> Optional[TradeRecord]:
+    def process_signal(self, signal: Signal, size_override: float | None = None) -> Optional[TradeRecord]:
         """
         Given a strategy signal, decide whether to open or skip.
         Returns a TradeRecord only when a position is *closed* (for logging).
+        size_override: if set, use this as the position size instead of default %.
         """
         if signal.side == Side.HOLD:
             return None
@@ -87,7 +88,7 @@ class PaperTrader:
         if self.has_open_position:
             return None  # risk rule: max 1 position at a time
 
-        return self._open_position(signal)
+        return self._open_position(signal, size_override=size_override)
 
     def check_stop_loss(self, current_yes_price: float) -> Optional[TradeRecord]:
         """Close the open position if the stop-loss threshold is breached."""
@@ -188,8 +189,8 @@ class PaperTrader:
     # Internal
     # ------------------------------------------------------------------
 
-    def _open_position(self, signal: Signal) -> None:
-        size = round(self.balance * self.max_position_pct, 2)
+    def _open_position(self, signal: Signal, size_override: float | None = None) -> None:
+        size = size_override if size_override is not None else round(self.balance * self.max_position_pct, 2)
         if size < 0.01:
             return None
 

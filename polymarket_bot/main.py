@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Polymarket Paper Trading Bot – main entry point (v3.0 Short-Term).
+Polymarket Paper Trading Bot – main entry point (v5.0 Adaptive).
 
 Short-term trading: profit from price movements between cycles.
 Uses real Polymarket API prices + realistic market microstructure
 (bid-ask spread, slippage, micro-fluctuations).
 
-No simulated event resolutions — all P&L comes from price changes.
+v5.0: persistent trade history, adaptive training, Kelly sizing.
 
 Usage:
     python -m polymarket_bot.main                          # default: 20 cycles, 30s
     python -m polymarket_bot.main --cycles 50 --interval 60
-    python -m polymarket_bot.main --strategy prob
+    python -m polymarket_bot.main --strategy sentiment --adaptive
 """
 
 import argparse
@@ -30,6 +30,13 @@ from polymarket_bot.strategy import (
 )
 from polymarket_bot.paper_trader import PaperTrader
 from polymarket_bot.sentiment_engine import SentimentEngine
+from polymarket_bot.trade_history import (
+    TradeHistoryDB,
+    TradeEntry,
+    AdaptiveEngine,
+    kelly_size,
+    fixed_size,
+)
 
 
 # ── Market Microstructure ──────────────────────────────────────────
@@ -139,19 +146,39 @@ def run_bot(
     capital: float = 200.0,
     market_limit: int = 200,
     llm_provider: str | None = None,
+    adaptive: bool = False,
 ):
     """Main trading loop — short-term, price-movement based."""
     print("=" * 60)
-    print("  POLYMARKET PAPER TRADING BOT  v4.0 (Short-Term + Sentiment)")
+    print("  POLYMARKET PAPER TRADING BOT  v5.0 (Adaptive + Sentiment)")
     print(f"  Strategy   : {strategy_name}")
     print(f"  Capital    : \u20ac{capital:.2f}")
     print(f"  Cycles     : {cycles}")
     print(f"  Interval   : {interval}s")
     print(f"  Mode       : Short-term (spread + micro-price simulation)")
+    print(f"  Sizing     : {'Kelly (adaptive)' if adaptive else 'Fixed 10%'}")
     print("=" * 60)
+
+    # ── History & Adaptive Engine ──
+    history_db = TradeHistoryDB()
+    adaptive_engine = AdaptiveEngine(history_db)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    if adaptive and history_db.count > 0:
+        stats = adaptive_engine.train()
+        adaptive_engine.print_training_report()
+    elif adaptive:
+        print("\n  No historical data yet — using default parameters.")
+        print("  The bot will learn and adapt after this first run.")
+        stats = adaptive_engine.stats
+    else:
+        stats = adaptive_engine.load_stats()
 
     trader = PaperTrader(initial_capital=capital)
     tracker = PriceTracker()
+
+    # Use adaptive min-edge if enough data
+    min_edge = stats.recommended_min_edge if adaptive and history_db.count >= 10 else 0.08
 
     sentiment_engine: SentimentEngine | None = None
 
@@ -162,12 +189,17 @@ def run_bot(
             max_articles=8,
         )
         mode_label = f"LLM ({llm_provider})" if llm_provider else "VADER"
-        strategy = SentimentEdgeStrategy(sentiment_engine, min_edge=0.08)
+        strategy = SentimentEdgeStrategy(sentiment_engine, min_edge=min_edge)
         print(f"  Sentiment  : {mode_label}")
     elif strategy_name == "prob":
-        strategy = ProbabilisticEdgeStrategy(min_edge=0.08)
+        strategy = ProbabilisticEdgeStrategy(min_edge=min_edge)
     else:
         strategy = MeanReversionStrategy(low_threshold=0.40, high_threshold=0.60)
+
+    if adaptive:
+        print(f"  Min edge   : {min_edge:.0%} {'(learned)' if history_db.count >= 10 else '(default)'}")
+        if stats.avoid_categories:
+            print(f"  Avoiding   : {', '.join(stats.avoid_categories)}")
 
     # Exit thresholds
     take_profit_pct = 0.03   # close if >=3% in our favor
@@ -175,8 +207,9 @@ def run_bot(
     max_hold_cycles = 8      # force close after 8 cycles
     hold_counter = 0
 
-    # Track volumes for spread calculation
+    # Track volumes and trade metadata for history
     _volumes: dict[str, float] = {}
+    _trade_metadata: dict = {}  # metadata for current open trade
 
     for cycle in range(1, cycles + 1):
         print(f"\n\u2500\u2500 Cycle {cycle}/{cycles} \u2500\u2500")
@@ -248,18 +281,30 @@ def run_bot(
                     exit_p = sim_price if pos.side == "YES" else (1.0 - sim_price)
                     print(f"  \u2191 Take profit! {change_pct:+.1%}")
                     trader.close_position_at(sim_price, reason=f"take-profit {change_pct:+.1%}")
+                    _save_trade_to_history(
+                        trader, history_db, run_id, strategy_name,
+                        _trade_metadata, f"take-profit", hold_counter,
+                    )
                     hold_counter = 0
 
                 # B) Stop loss
                 elif change_pct <= -stop_loss_pct:
                     print(f"  \u2193 Stop loss! {change_pct:+.1%}")
                     trader.close_position_at(sim_price, reason=f"stop-loss {change_pct:+.1%}")
+                    _save_trade_to_history(
+                        trader, history_db, run_id, strategy_name,
+                        _trade_metadata, f"stop-loss", hold_counter,
+                    )
                     hold_counter = 0
 
                 # C) Max hold
                 elif hold_counter >= max_hold_cycles:
                     print(f"  \u23f0 Max hold ({max_hold_cycles}) \u2014 closing at market ({change_pct:+.1%})")
                     trader.close_position_at(sim_price, reason=f"max-hold {change_pct:+.1%}")
+                    _save_trade_to_history(
+                        trader, history_db, run_id, strategy_name,
+                        _trade_metadata, f"max-hold", hold_counter,
+                    )
                     hold_counter = 0
 
         # 4. Look for new trades
@@ -269,6 +314,13 @@ def run_bot(
             candidates = [m for m in markets if m["id"] not in _recently_traded]
             if not candidates:
                 candidates = markets
+
+            # Adaptive: skip categories that historically lose
+            if adaptive and stats.avoid_categories:
+                filtered = [m for m in candidates
+                            if not adaptive_engine.should_skip_market(m["question"])]
+                if filtered:
+                    candidates = filtered
 
             # Prefer markets showing recent volatility
             volatile = [
@@ -312,10 +364,54 @@ def run_bot(
                 print(f"  ({len(signals)} signals, best confidence={best_sig.confidence:.2f})")
                 print(f"    mid={best_mkt['yes_price']:.4f}  fill={fill_price:.4f}  spread={half_sp*2:.3f}")
 
-                trader.process_signal(best_sig)
+                # Calculate position size
+                if adaptive:
+                    trade_size = kelly_size(
+                        edge=best_sig.confidence,
+                        win_rate=stats.overall_win_rate if stats.total_trades > 0 else 0.35,
+                        avg_win=stats.avg_win_pnl if stats.avg_win_pnl > 0 else 1.0,
+                        avg_loss=stats.avg_loss_pnl if stats.avg_loss_pnl > 0 else 1.0,
+                        balance=trader.balance,
+                    )
+                    print(f"    Kelly size=\u20ac{trade_size:.2f} ({trade_size/trader.balance*100:.1f}% of balance)")
+                else:
+                    trade_size = None  # use default fixed 10%
+
+                trader.process_signal(best_sig, size_override=trade_size)
                 # Adjust entry to the realistic fill price
                 if trader.has_open_position:
                     trader.position.entry_price = fill_price
+                    # Store metadata for history
+                    _trade_metadata = {
+                        "edge": best_sig.confidence,
+                        "sentiment_score": 0.0,
+                        "estimated_prob": 0.0,
+                        "articles_found": 0,
+                        "market_volume": best_mkt["volume"],
+                    }
+                    # Extract sentiment metadata from reason string
+                    reason = best_sig.reason
+                    if "sent=" in reason:
+                        try:
+                            _trade_metadata["sentiment_score"] = float(
+                                reason.split("sent=")[1].split(",")[0]
+                            )
+                        except (IndexError, ValueError):
+                            pass
+                    if "est=" in reason:
+                        try:
+                            _trade_metadata["estimated_prob"] = float(
+                                reason.split("est=")[1].split(",")[0]
+                            )
+                        except (IndexError, ValueError):
+                            pass
+                    if "news=" in reason:
+                        try:
+                            _trade_metadata["articles_found"] = int(
+                                reason.split("news=")[1].split(",")[0].split(")")[0]
+                            )
+                        except (IndexError, ValueError):
+                            pass
 
                 _recently_traded.append(best_sig.market_id)
                 if len(_recently_traded) > MAX_RECENT:
@@ -347,15 +443,64 @@ def run_bot(
         if last is not None:
             print(f"\n  Closing remaining position at market...")
             trader.close_position_at(last, reason="session-end")
+            _save_trade_to_history(
+                trader, history_db, run_id, strategy_name,
+                _trade_metadata, "session-end", hold_counter,
+            )
 
     trader.print_summary()
     trader.save_trade_log()
     trader.save_equity_curve()
+
+    # Retrain and show report if we have trades
+    if history_db.count > 0:
+        stats = adaptive_engine.train()
+        adaptive_engine.print_training_report()
+        print(f"  History: {history_db.count} total trades saved to history/trade_history.json")
+
     return trader
 
 
+def _save_trade_to_history(
+    trader: PaperTrader,
+    db: TradeHistoryDB,
+    run_id: str,
+    strategy_name: str,
+    metadata: dict,
+    exit_reason: str,
+    hold_cycles: int,
+):
+    """Save the most recent closed trade to the persistent history."""
+    if not trader.trade_log:
+        return
+    t = trader.trade_log[-1]
+    entry = TradeEntry(
+        trade_id=t.trade_id,
+        run_id=run_id,
+        timestamp=t.closed_at,
+        market_id=t.market_id,
+        question=t.question,
+        side=t.side,
+        entry_price=t.entry_price,
+        exit_price=t.exit_price,
+        size=t.size,
+        pnl=t.pnl,
+        balance_after=t.balance_after,
+        strategy=strategy_name,
+        edge=metadata.get("edge", 0.0),
+        sentiment_score=metadata.get("sentiment_score", 0.0),
+        estimated_prob=metadata.get("estimated_prob", 0.0),
+        articles_found=metadata.get("articles_found", 0),
+        exit_reason=exit_reason,
+        hold_cycles=hold_cycles,
+        market_volume=metadata.get("market_volume", 0.0),
+        win=t.pnl > 0,
+    )
+    db.add(entry)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Polymarket Paper Trading Bot (Short-Term)")
+    parser = argparse.ArgumentParser(description="Polymarket Paper Trading Bot (Adaptive)")
     parser.add_argument("--cycles", type=int, default=20, help="Trading cycles (default: 20)")
     parser.add_argument("--interval", type=int, default=30, help="Seconds between cycles (default: 30)")
     parser.add_argument("--strategy", choices=["mean_reversion", "prob", "sentiment"], default="mean_reversion",
@@ -364,6 +509,8 @@ def main():
                         help="LLM provider for sentiment strategy (default: VADER, no API key needed)")
     parser.add_argument("--capital", type=float, default=200.0, help="Initial capital in \u20ac (default: 200)")
     parser.add_argument("--markets", type=int, default=200, help="Markets to fetch per cycle (default: 200)")
+    parser.add_argument("--adaptive", action="store_true", default=False,
+                        help="Enable adaptive mode: Kelly sizing + learned parameters")
     args = parser.parse_args()
 
     run_bot(
@@ -373,6 +520,7 @@ def main():
         capital=args.capital,
         market_limit=args.markets,
         llm_provider=args.llm,
+        adaptive=args.adaptive,
     )
 
 
